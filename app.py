@@ -7,10 +7,9 @@ st.set_page_config(page_title="Nhận diện món ăn Việt Nam", layout="cente
 st.title("📸 AI Nhận Diện Món Ăn Việt Nam")
 st.write("Ứng dụng chạy trên nền tảng Streamlit Cloud")
 
-# Tải model và lưu vào bộ nhớ cache để app chạy mượt hơn
+# Tải model bằng TensorFlow kết hợp cache
 @st.cache_resource
 def load_my_model():
-    # File model phải nằm chung thư mục với file app.py này
     return tf.keras.models.load_model('best_vietnam_food_model.h5')
 
 try:
@@ -20,6 +19,7 @@ except Exception as e:
 
 # Danh sách 5 món ăn xếp theo bảng chữ cái
 labels = ['Banh mi', 'Banh trang nuong', 'Bun bo hue', 'Goi cuon', 'Pho']
+
 
 # Cho phép cả chụp ảnh trực tiếp và upload ảnh từ máy
 img_file = st.camera_input("Chụp ảnh món ăn:")
