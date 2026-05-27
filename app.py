@@ -1,7 +1,7 @@
 """
 Vietnamese Food Recognition Web Application
 Author: Professional Software Engineer Persona
-Feature: Integrated Dynamic H5 Hot-Patching for Keras 2/3 Cross-Compatibility
+Fix: Smart Remapping of Keras 3 'batch_shape' to Keras 2 'batch_input_shape'
 """
 
 import streamlit as st
@@ -37,18 +37,16 @@ TARGET_IMAGE_SIZE = (224, 224)
 FOOD_LABELS = ['Banh mi', 'Banh trang nuong', 'Bun bo hue', 'Goi cuon', 'Pho']
 
 # ==============================================================================
-# 2. ELITE UTILITY: Keras 3 to Keras 2 Hot-Patching
+# 2. ADVANCED UTILITY: Keras 3 to Keras 2 Structural Remapping
 # ==============================================================================
 def hot_patch_keras_model(h5_path: str):
     """
-    Trích xuất chuỗi JSON cấu hình kiến trúc mạng bên trong file .h5,
-    đệ quy loại bỏ toàn bộ các tham số độc quyền của Keras 3 để bảo toàn tính 
-    tương thích ngược trên môi trường Keras 2 của Streamlit Cloud.
+    Phẫu thuật file cấu hình cấu trúc mạng .h5:
+    Chuyển đổi tham số hình khối từ chuẩn Keras 3 sang Keras 2 để không bị mất 'shape'.
     """
     if not os.path.exists(h5_path):
         return
     try:
-        # Mở file .h5 ở chế độ đọc-ghi (Read/Write)
         with h5py.File(h5_path, 'r+') as f:
             if 'model_config' in f.attrs:
                 config_data = f.attrs['model_config']
@@ -57,13 +55,17 @@ def hot_patch_keras_model(h5_path: str):
                 
                 config_json = json.loads(config_data)
                 
-                # Hàm đệ quy duyệt cây cấu trúc JSON để xóa các key không hợp lệ
                 def clean_unsupported_nodes(node):
                     if isinstance(node, dict):
-                        # Danh sách các tham số gây lỗi bất đồng bộ thiết kế lớp giữa 2 phiên bản
-                        bad_keys = ['quantization_config', 'optional', 'batch_shape', 'ragged', 'sparse']
+                        # QUAN TRỌNG: Thay vì xóa, ta chuyển đổi tên biến kích thước hình khối
+                        if 'batch_shape' in node:
+                            node['batch_input_shape'] = node.pop('batch_shape')
+                        
+                        # Chỉ xóa các tham số phụ không ảnh hưởng đến hình khối mô hình
+                        bad_keys = ['quantization_config', 'optional', 'ragged', 'sparse']
                         for key in bad_keys:
                             node.pop(key, None)
+                            
                         for k, v in node.items():
                             clean_unsupported_nodes(v)
                     elif isinstance(node, list):
@@ -71,10 +73,8 @@ def hot_patch_keras_model(h5_path: str):
                             clean_unsupported_nodes(item)
                 
                 clean_unsupported_nodes(config_json)
-                # Ghi đè lại chuỗi cấu hình sạch vào thuộc tính metadata của file h5
                 f.attrs['model_config'] = json.dumps(config_json).encode('utf-8')
     except Exception as patch_err:
-        # Nếu file đang bị khóa hoặc đã được patch trước đó, bỏ qua để tránh crash luồng
         pass
 
 # ==============================================================================
@@ -82,12 +82,11 @@ def hot_patch_keras_model(h5_path: str):
 # ==============================================================================
 @st.cache_resource(show_spinner=False)
 def load_and_initialize_model(model_file: str) -> tf.keras.Model:
-    # Thực hiện vá lỗi tệp tin cấu hình trước khi nạp vào bộ nhớ
     hot_patch_keras_model(model_file)
     return tf.keras.models.load_model(model_file)
 
 try:
-    with st.spinner("Hệ thống đang thực hiện Vá lỗi cấu trúc cấu hình và Nạp trọng số mô hình..."):
+    with st.spinner("Hệ thống đang đồng bộ cấu trúc hình khối và nạp mô hình..."):
         model = load_and_initialize_model(MODEL_PATH)
 except Exception as error:
     st.error(f"❌ [System Error] Không thể giải tuần tự hóa mô hình: {error}")
@@ -131,7 +130,6 @@ if active_image_buffer is not None:
             
         st.subheader("🎯 Kết quả phân tích từ AI")
         
-        # Ngưỡng lọc chặn ảnh rác ngoài danh mục (40%)
         if confidence_score > 40.0:
             predicted_label = FOOD_LABELS[top_class_index]
             st.markdown(f"""
