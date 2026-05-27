@@ -1,4 +1,5 @@
 streamlit
 tensorflow-cpu
+h5py
 pillow
 numpy
