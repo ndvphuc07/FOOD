@@ -28,7 +28,7 @@ CLASS_NAMES = [
 @st.cache_resource
 def load_my_model():
     """Load model một lần duy nhất và lưu vào bộ nhớ cache để tăng tốc độ app"""
-    model_path = 'best_vietnamese_food_model.h5'
+    model_path = 'best_vietnamese_food_model.keras'
     model = tf.keras.models.load_model(model_path)
     return model
 
