@@ -1,148 +1,106 @@
-"""
-Vietnamese Food Recognition Web Application
-Author: Professional Software Engineer Persona
-Fix: Smart Remapping of Keras 3 'batch_shape' to Keras 2 'batch_input_shape'
-"""
-
+import streamlit as tf_st  # Tránh xung đột tên với tensorflow
 import streamlit as st
 import tensorflow as tf
 from PIL import Image, ImageOps
 import numpy as np
-import os
-import h5py
-import json
 
-# ==============================================================================
-# 1. APPLICATION & UI CONFIGURATION
-# ==============================================================================
+# Cấu hình trang Streamlit
 st.set_page_config(
-    page_title="AI Vietnamese Food Recognizer",
-    page_icon="📸",
+    page_title="Vietnamese Food Identifier",
+    page_icon="🍲",
     layout="centered"
 )
 
-st.markdown("""
-    <style>
-    .main-title { font-size: 2.5rem; color: #005088; text-align: center; font-weight: 700; margin-bottom: 10px; }
-    .subtitle { text-align: center; color: #555555; margin-bottom: 30px; }
-    .result-box { padding: 20px; border-radius: 10px; background-color: #f0f8ff; border-left: 5px solid #11CAA0; margin-top: 20px; }
-    </style>
-""", unsafe_allow_html=True)
+# Định nghĩa danh sách class theo thứ tự chữ cái (khớp với ImageDataGenerator)
+CLASS_NAMES = [
+    'Banh mi', 
+    'Banh trang nuong', 
+    'Banh xeo', 
+    'Bun bo hue', 
+    'Com tam', 
+    'Goi cuon', 
+    'Pho'
+]
 
-st.markdown('<div class="main-title">📸 Hệ Thống Nhận Diện Món Ăn Việt Nam</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtitle">Ứng dụng Deep Learning (CNN) nhận diện Phở, Bánh mì, Bún bò Huế, Gỏi cuốn, Bánh tráng nướng</div>', unsafe_allow_html=True)
+# ==========================================
+# CACHING MODEL (BẮT BUỘC CHO STREAMLIT CLOUD)
+# ==========================================
+@st.cache_resource
+def load_my_model():
+    """Load model một lần duy nhất và lưu vào bộ nhớ cache để tăng tốc độ app"""
+    model_path = 'best_vietnamese_food_model.h5'
+    model = tf.keras.models.load_model(model_path)
+    return model
 
-MODEL_PATH = 'best_vietnam_food_model.h5'
-TARGET_IMAGE_SIZE = (224, 224)
-FOOD_LABELS = ['Banh mi', 'Banh trang nuong', 'Bun bo hue', 'Goi cuon', 'Pho']
+# Khởi chạy load model
+with st.spinner("🔄 Đang tải mô hình AI... Vui lòng đợi trong giây lát..."):
+    model = load_my_model()
 
-# ==============================================================================
-# 2. ADVANCED UTILITY: Keras 3 to Keras 2 Structural Remapping
-# ==============================================================================
-def hot_patch_keras_model(h5_path: str):
-    """
-    Phẫu thuật file cấu hình cấu trúc mạng .h5:
-    Chuyển đổi tham số hình khối từ chuẩn Keras 3 sang Keras 2 để không bị mất 'shape'.
-    """
-    if not os.path.exists(h5_path):
-        return
-    try:
-        with h5py.File(h5_path, 'r+') as f:
-            if 'model_config' in f.attrs:
-                config_data = f.attrs['model_config']
-                if isinstance(config_data, bytes):
-                    config_data = config_data.decode('utf-8')
-                
-                config_json = json.loads(config_data)
-                
-                def clean_unsupported_nodes(node):
-                    if isinstance(node, dict):
-                        # QUAN TRỌNG: Thay vì xóa, ta chuyển đổi tên biến kích thước hình khối
-                        if 'batch_shape' in node:
-                            node['batch_input_shape'] = node.pop('batch_shape')
-                        
-                        # Chỉ xóa các tham số phụ không ảnh hưởng đến hình khối mô hình
-                        bad_keys = ['quantization_config', 'optional', 'ragged', 'sparse']
-                        for key in bad_keys:
-                            node.pop(key, None)
-                            
-                        for k, v in node.items():
-                            clean_unsupported_nodes(v)
-                    elif isinstance(node, list):
-                        for item in node:
-                            clean_unsupported_nodes(item)
-                
-                clean_unsupported_nodes(config_json)
-                f.attrs['model_config'] = json.dumps(config_json).encode('utf-8')
-    except Exception as patch_err:
-        pass
-
-# ==============================================================================
-# 3. MODEL LOADING WITH CACHE
-# ==============================================================================
-@st.cache_resource(show_spinner=False)
-def load_and_initialize_model(model_file: str) -> tf.keras.Model:
-    hot_patch_keras_model(model_file)
-    return tf.keras.models.load_model(model_file)
-
-try:
-    with st.spinner("Hệ thống đang đồng bộ cấu trúc hình khối và nạp mô hình..."):
-        model = load_and_initialize_model(MODEL_PATH)
-except Exception as error:
-    st.error(f"❌ [System Error] Không thể giải tuần tự hóa mô hình: {error}")
-    st.stop()
-
-# ==============================================================================
-# 4. PIPELINE TIỀN XỬ LÝ ẢNH (IMAGE PREPROCESSING)
-# ==============================================================================
-def preprocess_input_image(raw_image: Image.Image, target_size: tuple) -> np.ndarray:
-    if raw_image.mode != "RGB":
-        raw_image = raw_image.convert("RGB")
-    processed_img = ImageOps.fit(raw_image, target_size, Image.LANCZOS)
-    img_array = np.asarray(processed_img, dtype=np.float32)
-    rescaled_img = img_array / 255.0
-    final_tensor = np.expand_dims(rescaled_img, axis=0)
-    return final_tensor
-
-# ==============================================================================
-# 5. UX COMPONENTS & INFERENCE FLOW
-# ==============================================================================
-mode_selection = st.radio("Chọn phương thức nhập dữ liệu ảnh:", ("Chụp ảnh trực tiếp", "Tải file ảnh lên từ máy"))
-active_image_buffer = None
-
-if mode_selection == "Chụp ảnh trực tiếp":
-    active_image_buffer = st.camera_input("Vui lòng căn chỉnh món ăn giữa khung hình camera:")
-else:
-    active_image_buffer = st.file_uploader("Chọn tệp tin hình ảnh món ăn:", type=["jpg", "jpeg", "png"])
-
-if active_image_buffer is not None:
-    try:
-        user_image = Image.open(active_image_buffer)
-        st.markdown("---")
-        st.subheader("🖼️ Dữ liệu hình ảnh đầu vào")
-        st.image(user_image, caption="Hình ảnh thực tế được cung cấp", use_column_width=True)
+# ==========================================
+# HÀM XỬ LÝ VÀ DỰ ĐOÁN ẢNH
+# ==========================================
+def predict(image_data, model):
+    # Định dạng lại kích thước ảnh chuẩn 224x224 như lúc train
+    size = (224, 224)
+    image = ImageOps.fit(image_data, size, Image.Resampling.LANCZOS)
+    
+    # Chuyển ảnh thành mảng numpy và chuẩn hóa (rescale 1./255)
+    img_array = np.asarray(image)
+    
+    # Kiểm tra nếu ảnh là ảnh trắng đen (1 channel) thì chuyển sang RGB
+    if len(img_array.shape) == 2:
+        img_array = np.stack((img_array,)*3, axis=-1)
+    # Nếu ảnh có kênh alpha (RGBA), chỉ lấy 3 kênh đầu (RGB)
+    elif img_array.shape[2] == 4:
+        img_array = img_array[:, :, :3]
         
-        with st.spinner("AI đang trích xuất đặc trưng hình ảnh..."):
-            input_tensor = preprocess_input_image(user_image, TARGET_IMAGE_SIZE)
-            raw_predictions = model.predict(input_tensor)
-            top_class_index = np.argmax(raw_predictions)
-            confidence_score = raw_predictions[0][top_class_index] * 100
-            
-        st.subheader("🎯 Kết quả phân tích từ AI")
-        
-        if confidence_score > 40.0:
-            predicted_label = FOOD_LABELS[top_class_index]
-            st.markdown(f"""
-                <div class="result-box">
-                    <h3 style='margin: 0; color: #005088;'>Món ăn được nhận diện: <b>{predicted_label}</b></h3>
-                    <p style='margin: 10px 0 0 0; color: #333;'>Hệ thống đã khớp cấu trúc hình ảnh chính xác.</p>
-                </div>
-            """, unsafe_allow_html=True)
-            st.write("")
-            st.metric(label="Độ chính xác / Tin cậy của mô hình", value=f"{confidence_score:.2f}%")
-            st.progress(int(confidence_score))
-        else:
-            st.warning("⚠️ **Hệ thống từ chối phân lớp:** Hình ảnh không rõ ràng hoặc không nằm trong danh mục 5 món ăn hệ thống được học.")
-            
-    except Exception as run_error:
-        st.error(f"❌ Lỗi thực thi dự đoán hệ thống: {run_error}")
+    img_array = img_array / 255.0
+    img_reshape = np.expand_dims(img_array, axis=0) # Thêm dimension cho batch size
+    
+    # Dự đoán
+    prediction = model.predict(img_reshape)
+    class_idx = np.argmax(prediction[0])
+    confidence = prediction[0][class_idx] * 100
+    
+    return CLASS_NAMES[class_idx], confidence
+
+# ==========================================
+# GIAO DIỆN ỨNG DỤNG (UI/UX)
+# ==========================================
+st.title("🍲 Nhận Diện Món Ăn Việt Nam")
+st.write("Ứng dụng AI sử dụng mạng CNN để nhận diện 7 món ăn phổ biến.")
+st.markdown("---")
+
+# Tạo 2 tabs cho người dùng lựa chọn phương thức đầu vào
+tab1, tab2 = st.tabs(["📸 Chụp ảnh từ Camera", "📤 Tải ảnh lên từ thiết bị"])
+
+image = None
+
+with tab1:
+    camera_image = st.camera_input("Bấm nút chụp ảnh món ăn của bạn:")
+    if camera_image:
+        image = Image.open(camera_image)
+
+with tab2:
+    uploaded_file = st.file_uploader("Chọn một file ảnh (jpg, jpeg, png)...", type=["jpg", "jpeg", "png"])
+    if uploaded_file:
+        image = Image.open(uploaded_file)
+
+# Xử lý khi có ảnh đầu vào
+if image is not None:
+    st.markdown("### 📷 Ảnh đầu vào của bạn:")
+    st.image(image, use_container_width=True)
+    
+    st.markdown("---")
+    with st.spinner("🧠 AI đang phân tích món ăn..."):
+        label, confidence = predict(image, model)
+    
+    # Hiển thị kết quả một cách chuyên nghiệp
+    st.subheader("📊 Kết quả dự đoán:")
+    
+    if confidence > 60: # Ngưỡng tin cậy chấp nhận được
+        st.success(f"Dự đoán đây là món: **{label}**")
+        st.info(f"🎯 Độ tự tin (Confidence): **{confidence:.2f}%**")
+    else:
+        st.warning(f"AI không quá chắc chắn, nhưng có khả năng cao là: **{label}** ({confidence:.2f}%)")
+        st.caption("💡 Mẹo: Bạn hãy thử chụp lại ảnh ở góc độ rõ ràng và đủ ánh sáng hơn nhé!")
